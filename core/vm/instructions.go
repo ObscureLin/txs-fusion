@@ -17,6 +17,7 @@
 package vm
 
 import (
+	"encoding/binary"
 	"fmt"
 	"sync/atomic"
 
@@ -946,18 +947,30 @@ func opBsstore(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]
 	if interpreter.readOnly {
 		return nil, ErrWriteProtection
 	}
+
 	// Call data pointer
 	var callDataPtr uint256.Int
 	callDataPtr.SetUint64(4)
-	index := getCallData(callDataPtr, scope) // 开始写入的数组的位置
+	target := getCallData(callDataPtr, scope) // 目标数组
 	callDataPtr.SetUint64(4 + 32)
-	start := getCallData(callDataPtr, scope) // uint256.Int // 入参数组的开始位置
-	callDataPtr.SetUint64(4 + 32 + 32)       //指向传入的256数组
+	index := getCallData(callDataPtr, scope) // 开始写入的数组的位置
+	callDataPtr.SetUint64(4 + 32 + 32)
+	start := getCallData(callDataPtr, scope) // uint256.Int,入参数组的开始位置
+	callDataPtr.SetUint64(4 + 32 + 32 + 32)  //指向传入的256数组
+
+	// 根据目标数组生成起始slot
+	var beginSlot uint256.Int
+	if target.Eq(uint256.NewInt(1)) {
+		beginSlot.SetUint64(0)
+	} else if target.Eq(uint256.NewInt(2)) {
+		beginSlot.SetUint64(16787756)
+	} else if target.Eq(uint256.NewInt(3)) {
+		beginSlot.SetUint64(33575512)
+	}
 
 	//创建channel
-	ch := make(chan Bundle, 8) // 每组30个bundle 30*8=240
-	defer close(ch)
-
+	//ch := make(chan Bundle, 8) // 每组30个bundle 30*8=240
+	//defer close(ch)
 	//启动写入协程
 	//go func(ch chan Bundle) {
 	//	for bundle := range ch {
@@ -971,6 +984,7 @@ func opBsstore(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]
 		var bundleSlice [32]byte
 		var loc uint256.Int
 		loc.Div(&index, uint256.NewInt(8))
+		loc.Add(&loc, &beginSlot)
 
 		for i := 0; i < 30; i++ {
 
@@ -995,9 +1009,65 @@ func opBsstore(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]
 }
 
 func opBagg(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]byte, error) {
-	return nil, nil
+
+	if interpreter.readOnly {
+		return nil, ErrWriteProtection
+	}
+
+	// Call data pointer
+	var callDataPtr uint256.Int
+	callDataPtr.SetUint64(4)
+	start := getCallData(callDataPtr, scope) // 聚合起始地址
+
+	update1Slot := uint256.NewInt(0)
+	update2Slot := uint256.NewInt(16787756)
+	update3Slot := uint256.NewInt(33575512)
+	aggSlot := uint256.NewInt(50363268)
+
+	var offsetSlot uint256.Int
+	offsetSlot.Div(&start, uint256.NewInt(8))
+	update1Slot.Add(update1Slot, &offsetSlot)
+	update2Slot.Add(update2Slot, &offsetSlot)
+	update3Slot.Add(update3Slot, &offsetSlot)
+	aggSlot.Add(aggSlot, &offsetSlot)
+
+	var bundleSlice [32]byte
+	for i := 0; i < 30; i++ {
+		uid1SlotValue := interpreter.evm.StateDB.GetState(scope.Contract.Address(), update1Slot.Bytes32())
+		uid2SlotValue := interpreter.evm.StateDB.GetState(scope.Contract.Address(), update2Slot.Bytes32())
+		uid3SlotValue := interpreter.evm.StateDB.GetState(scope.Contract.Address(), update3Slot.Bytes32())
+		for j := 0; j < 8; j++ {
+			uid1TempValue := binary.BigEndian.Uint32(uid1SlotValue[j*4 : j*4+4])
+			uid2TempValue := binary.BigEndian.Uint32(uid2SlotValue[j*4 : j*4+4])
+			uid3TempValue := binary.BigEndian.Uint32(uid3SlotValue[j*4 : j*4+4])
+			uid1TempValue += uid2TempValue
+			uid1TempValue += uid3TempValue
+			uid1TempValue /= 3
+			var toStore [4]byte
+			binary.BigEndian.PutUint32(toStore[0:4], uid1TempValue)
+			copy(bundleSlice[j*4:j*4+4], toStore[:])
+		}
+		// ch <- Bundle{scope.Contract.Address(), aggSlot.Bytes32(), bundleSlice}
+		interpreter.evm.StateDB.SetState(scope.Contract.Address(), aggSlot.Bytes32(), bundleSlice)
+		update1Slot.AddUint64(update1Slot, 1)
+		update2Slot.AddUint64(update2Slot, 1)
+		update3Slot.AddUint64(update3Slot, 1)
+		aggSlot.AddUint64(aggSlot, 1)
+	}
+
+	return nil, errStopToken
 }
 
 func opBdl(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]byte, error) {
-	return nil, nil
+
+	if interpreter.readOnly {
+		return nil, ErrWriteProtection
+	}
+
+	// Call data pointer
+	var callDataPtr uint256.Int
+	callDataPtr.SetUint64(4)
+	start := getCallData(callDataPtr, scope) // 下载起始地址
+
+	return nil, errStopToken
 }
