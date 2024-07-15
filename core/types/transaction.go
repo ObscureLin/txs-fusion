@@ -65,6 +65,18 @@ func NewTx(inner TxData) *Transaction {
 	return tx
 }
 
+func (tx *Transaction) From() atomic.Value {
+	return tx.from
+}
+
+func (tx *Transaction) Parent() *uint64 {
+	return tx.inner.parent()
+}
+
+func (tx *Transaction) Child() *[]uint64 {
+	return tx.inner.child()
+}
+
 // TxData is the underlying data of a transaction.
 //
 // This is implemented by DynamicFeeTx, LegacyTx and AccessListTx.
@@ -85,6 +97,10 @@ type TxData interface {
 
 	rawSignatureValues() (v, r, s *big.Int)
 	setSignatureValues(chainID, v, r, s *big.Int)
+
+	// txs-link function
+	parent() *uint64
+	child() *[]uint64
 }
 
 // EncodeRLP implements rlp.Encoder
@@ -656,4 +672,14 @@ func copyAddressPtr(a *common.Address) *common.Address {
 	}
 	cpy := *a
 	return &cpy
+}
+
+// copyChildPtr copies an address.
+func copyChildPtr(a []uint64) []uint64 {
+	if a == nil {
+		return nil
+	}
+	cpy := make([]uint64, len(a))
+	copy(cpy, a)
+	return cpy
 }

@@ -17,9 +17,9 @@
 package core
 
 import (
+	"bytes"
 	"fmt"
-	"math/big"
-
+	"github.com/ethereum/go-ethereum/bcfl"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/misc"
@@ -27,7 +27,10 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
+	"math/big"
+	"sync"
 )
 
 // StateProcessor is a basic Processor, which takes care of transitioning
@@ -71,18 +74,80 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		misc.ApplyDAOHardFork(statedb)
 	}
 	blockContext := NewEVMBlockContext(header, p.bc, nil)
-	vmenv := vm.NewEVM(blockContext, vm.TxContext{}, statedb, p.config, cfg)
+	vmenv := vm.NewEVM(blockContext, vm.TxContext{}, statedb, p.config, cfg) // *EVM
+
 	// Iterate over and process the individual transactions
+	//fmt.Printf("\n[Lin-Process]: +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++ \n")
+	//for index, v := range block.Transactions() {
+	//	fmt.Printf("当前交易是: %v, Parent: %v, Child: %v \n", index, *(v.Parent()), *(v.Child()))
+	//}
+	// fmt.Printf("[Lin-Process]: ========================================================================================= \n\n")
+
+	// 判断是否是并行交易
+	target, err := bcfl.HexToByteArray(bcfl.SetUpdates)
+	if err != nil {
+		fmt.Printf("[Lin] Error HexToByteArray: %v \n", err)
+	}
+
+	var (
+		cocrTxs       types.Transactions // 按block内的顺序,保存需要并发执行的交易 *Transaction
+		cocrMsgs      []*types.Message   // 按block内的顺序,保存需要并发执行交易的msg结构
+		cocrIndex     []int              // 按block内的顺序,保存需要并发执行的交易的索引
+		cocrWaitGroup sync.WaitGroup     // 并发等待组
+	)
+
+	var msgToReceipt sync.Map                  // *msg -> *receipt 的映射
+	indexToMsg := make(map[int]*types.Message) // index -> *msg 的映射
+
 	for i, tx := range block.Transactions() {
-		msg, err := tx.AsMessage(types.MakeSigner(p.config, header.Number), header.BaseFee)
-		if err != nil {
-			return nil, nil, 0, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
+		// 如果是需要并发的交易,整理成一个需要并发的tx切片传递给并发程序，并且wg+1,wg要指针传递，数组要指针传递，vmenv要数值传递，receipts的切片要排序
+		if bytes.Compare(tx.Data()[:4], target) == 0 {
+			msg, err := tx.AsMessage(types.MakeSigner(p.config, header.Number), header.BaseFee)
+			if err != nil {
+				return nil, nil, 0, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
+			}
+			cocrTxs = append(cocrTxs, tx)
+			cocrMsgs = append(cocrMsgs, &msg)
+			cocrIndex = append(cocrIndex, i)
+			indexToMsg[i] = &msg // 记录当前串行交易的索引
+
+			cocrWaitGroup.Add(1) // 先不执行,wg+1
+		} else {
+			// 正常串行的交易
+			msg, err := tx.AsMessage(types.MakeSigner(p.config, header.Number), header.BaseFee)
+			if err != nil {
+				return nil, nil, 0, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
+			}
+			// tx.hash 通过 LOG 指令来创造Event，i（index）用于生成收据
+			statedb.SetTxContext(tx.Hash(), i)
+			receipt, err := applyTransaction(msg, p.config, gp, statedb, blockNumber, blockHash, tx, usedGas, vmenv)
+			if err != nil {
+				return nil, nil, 0, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
+			}
+			//receipts = append(receipts, receipt)
+			//allLogs = append(allLogs, receipt.Logs...)
+
+			// 记录当前串行交易的索引、收据
+			indexToMsg[i] = &msg
+			msgToReceipt.Store(&msg, receipt)
 		}
-		statedb.SetTxContext(tx.Hash(), i)
-		receipt, err := applyTransaction(msg, p.config, gp, statedb, blockNumber, blockHash, tx, usedGas, vmenv)
-		if err != nil {
-			return nil, nil, 0, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
+	}
+
+	// 等待并发结束处理,处理receipts, allLogs, *usedGas, error , usedGas 要累加，receipt 的生成root那部分改掉
+	cocrErrs := concurrentApplyTx(cocrMsgs, p.config, gp, statedb, blockNumber, blockHash, cocrTxs, usedGas, vmenv, &cocrWaitGroup, &msgToReceipt, &cocrIndex)
+	if len(cocrErrs) != 0 {
+		log.Error(fmt.Sprintf("[Lin-Process]并发交易出错: %w", cocrErrs))
+		return nil, nil, 0, fmt.Errorf("[Lin-Process]并发交易出错: %w", cocrErrs)
+	}
+
+	// 根据tx在区块内的顺序生成收据和日志
+	for j, _ := range block.Transactions() {
+		r, found := msgToReceipt.Load(indexToMsg[j])
+		for !found {
+			fmt.Printf("[Lin-Process-生成收据-sync.map]", found)
+			r, found = msgToReceipt.Load(indexToMsg[j])
 		}
+		receipt := r.(*types.Receipt)
 		receipts = append(receipts, receipt)
 		allLogs = append(allLogs, receipt.Logs...)
 	}
@@ -109,17 +174,19 @@ func applyTransaction(msg types.Message, config *params.ChainConfig, gp *GasPool
 	}
 
 	// Update the state with pending changes.
-	var root []byte
+	//var root []byte
 	if config.IsByzantium(blockNumber) {
 		statedb.Finalise(true)
 	} else {
-		root = statedb.IntermediateRoot(config.IsEIP158(blockNumber)).Bytes()
+		//root =
+		statedb.IntermediateRoot(config.IsEIP158(blockNumber)).Bytes()
 	}
 	*usedGas += result.UsedGas
 
 	// Create a new receipt for the transaction, storing the intermediate root and gas used
 	// by the tx.
-	receipt := &types.Receipt{Type: tx.Type(), PostState: root, CumulativeGasUsed: *usedGas}
+	// receipt := &types.Receipt{Type: tx.Type(), PostState: root, CumulativeGasUsed: *usedGas}
+	receipt := &types.Receipt{Type: tx.Type()}
 	if result.Failed() {
 		receipt.Status = types.ReceiptStatusFailed
 	} else {
@@ -140,6 +207,97 @@ func applyTransaction(msg types.Message, config *params.ChainConfig, gp *GasPool
 	receipt.BlockNumber = blockNumber
 	receipt.TransactionIndex = uint(statedb.TxIndex())
 	return receipt, err
+}
+
+func concurrentApplyTx(msgs []*types.Message, config *params.ChainConfig, gp *GasPool, statedb *state.StateDB, blockNumber *big.Int, blockHash common.Hash, txs types.Transactions, usedGas *uint64, evm *vm.EVM, wg *sync.WaitGroup, msgToReceipt *sync.Map, cocrIndex *[]int) []error {
+
+	fmt.Printf("[Lin-concurrentApplyTx]: 需要并发的交易: %v \n", msgs)
+
+	// var initGasPool = new(GasPool).AddGas(uint64(*gp)) // 记录初始gasPool
+	txsIndex := *cocrIndex   // 记录并发交易在区块内部的索引
+	var cocrErrs []error     // 记录并发执行交易时候出现的error
+	var ggeLock sync.RWMutex // 用于更新gaspool,gas,err时用的读写锁
+
+	// 遍历所有需要并发的交易msgs
+	for i, _ := range msgs {
+		index := i             // 记录当前循环的索引
+		cocrMsg := msgs[index] //获取要执行的msg
+
+		go func() { // 开始并行执行单个msg
+			defer wg.Done() // 通知并发组,并发完成 -1
+
+			cocrEVM := *evm                           // 创建一个新的EVM环境
+			var cocrGP = new(GasPool).AddGas(8000000) // 创建一个新的gaspool
+
+			// Create a new context to be used in the EVM environment.
+			txContext := NewEVMTxContext(cocrMsg)
+			cocrEVM.Reset(txContext, statedb)
+
+			// Apply the transaction to the current state (included in the env).
+			result, err := CocrApplyMessage(&cocrEVM, cocrMsg, cocrGP)
+
+			// 如果单笔并行交易出现错误,记录错误以供返回
+			if err != nil {
+				log.Error("[Lin-concurrentApplyTx]:单笔并行交易执行出错", err, "\n")
+				fmt.Errorf("[Lin-concurrentApplyTx]:单笔并行交易执行出错: %v \n", err)
+				ggeLock.Lock()
+				cocrErrs = append(cocrErrs, err)
+				ggeLock.Unlock()
+				// 保存一个空收据
+				receipt := &types.Receipt{}
+				msgToReceipt.Store(cocrMsg, receipt)
+				return
+			}
+
+			// 更新gaspool和usedGas
+			ggeLock.Lock()
+			gpErr := gp.SubGas(result.UsedGas)
+			if gpErr != nil {
+				log.Error("[Lin-concurrentApplyTx]:单笔并行交易更新GasPool出错", err, "\n")
+				fmt.Println("[Lin-concurrentApplyTx]:单笔并行交易更新GasPool出错", err)
+			}
+			*usedGas += result.UsedGas
+			ggeLock.Unlock()
+
+			// Create a new receipt for the transaction, storing the intermediate root and gas used
+			// by the tx.
+			receipt := &types.Receipt{Type: txs[index].Type()}
+			if result.Failed() {
+				receipt.Status = types.ReceiptStatusFailed
+			} else {
+				receipt.Status = types.ReceiptStatusSuccessful
+			}
+			receipt.TxHash = txs[index].Hash()
+			receipt.GasUsed = result.UsedGas
+
+			// If the transaction created a contract, store the creation address in the receipt.
+			if cocrMsg.To() == nil {
+				receipt.ContractAddress = crypto.CreateAddress(evm.TxContext.Origin, txs[index].Nonce())
+			}
+
+			// Set the receipt logs and create the bloom filter.
+			receipt.Logs = statedb.GetLogs(txs[index].Hash(), blockNumber.Uint64(), blockHash)
+			receipt.Bloom = types.CreateBloom(types.Receipts{receipt})
+			receipt.BlockHash = blockHash
+			receipt.BlockNumber = blockNumber
+			receipt.TransactionIndex = uint(txsIndex[index])
+			// 记录当前串行交易的收据
+			msgToReceipt.Store(cocrMsg, receipt)
+		}()
+	}
+	// 等待所有的并发完成
+	wg.Wait()
+
+	// Update the state with pending changes.
+	statedb.GetLock().Lock()
+	if config.IsByzantium(blockNumber) {
+		statedb.Finalise(true)
+	} else {
+		statedb.IntermediateRoot(config.IsEIP158(blockNumber)).Bytes()
+	}
+	statedb.GetLock().Unlock()
+
+	return cocrErrs
 }
 
 // ApplyTransaction attempts to apply a transaction to the given state database

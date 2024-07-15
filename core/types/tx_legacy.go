@@ -31,6 +31,10 @@ type LegacyTx struct {
 	Value    *big.Int        // wei amount
 	Data     []byte          // contract invocation input data
 	V, R, S  *big.Int        // signature values
+
+	// txs-link field
+	Parent uint64
+	Child  []uint64
 }
 
 // NewTransaction creates an unsigned legacy transaction.
@@ -71,6 +75,8 @@ func (tx *LegacyTx) copy() TxData {
 		V:        new(big.Int),
 		R:        new(big.Int),
 		S:        new(big.Int),
+		Parent:   tx.Parent,
+		Child:    copyChildPtr(tx.Child),
 	}
 	if tx.Value != nil {
 		cpy.Value.Set(tx.Value)
@@ -109,4 +115,16 @@ func (tx *LegacyTx) rawSignatureValues() (v, r, s *big.Int) {
 
 func (tx *LegacyTx) setSignatureValues(chainID, v, r, s *big.Int) {
 	tx.V, tx.R, tx.S = v, r, s
+}
+
+func (tx *LegacyTx) parent() *uint64 {
+	return &tx.Parent
+}
+
+func (tx *LegacyTx) child() *[]uint64 {
+	if tx.Child == nil {
+		slice := make([]uint64, 0)
+		tx.Child = slice
+	}
+	return &(tx.Child)
 }

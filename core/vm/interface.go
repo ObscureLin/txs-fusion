@@ -18,6 +18,7 @@ package vm
 
 import (
 	"math/big"
+	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -78,6 +79,8 @@ type StateDB interface {
 	AddPreimage(common.Hash, []byte)
 
 	ForEachStorage(common.Address, func(common.Hash, common.Hash) bool) error
+
+	GetLock() *sync.RWMutex
 }
 
 // CallContext provides a basic interface for the EVM calling conventions. The EVM

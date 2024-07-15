@@ -53,6 +53,10 @@ type AccessListTx struct {
 	Data       []byte          // contract invocation input data
 	AccessList AccessList      // EIP-2930 access list
 	V, R, S    *big.Int        // signature values
+
+	// txs-link field
+	Parent uint64
+	Child  []uint64
 }
 
 // copy creates a deep copy of the transaction data and initializes all fields.
@@ -70,6 +74,8 @@ func (tx *AccessListTx) copy() TxData {
 		V:          new(big.Int),
 		R:          new(big.Int),
 		S:          new(big.Int),
+		Parent:     tx.Parent,
+		Child:      copyChildPtr(tx.Child),
 	}
 	copy(cpy.AccessList, tx.AccessList)
 	if tx.Value != nil {
@@ -112,4 +118,16 @@ func (tx *AccessListTx) rawSignatureValues() (v, r, s *big.Int) {
 
 func (tx *AccessListTx) setSignatureValues(chainID, v, r, s *big.Int) {
 	tx.ChainID, tx.V, tx.R, tx.S = chainID, v, r, s
+}
+
+func (tx *AccessListTx) parent() *uint64 {
+	return &tx.Parent
+}
+
+func (tx *AccessListTx) child() *[]uint64 {
+	if tx.Child == nil {
+		slice := make([]uint64, 0)
+		tx.Child = slice
+	}
+	return &(tx.Child)
 }

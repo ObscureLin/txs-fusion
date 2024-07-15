@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"math/big"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -58,6 +59,10 @@ func (n *proofList) Delete(key []byte) error {
 // * Contracts
 // * Accounts
 type StateDB struct {
+
+	// 并发使用的读写锁
+	lock sync.RWMutex
+
 	db         Database
 	prefetcher *triePrefetcher
 	trie       Trie
@@ -125,6 +130,10 @@ type StateDB struct {
 	StorageUpdated int
 	AccountDeleted int
 	StorageDeleted int
+}
+
+func (s *StateDB) GetLock() *sync.RWMutex {
+	return &(s.lock)
 }
 
 // New creates a new state from a given trie.
