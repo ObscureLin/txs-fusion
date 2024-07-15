@@ -225,6 +225,13 @@ const (
 	TSTORE OpCode = 0xb4
 )
 
+// BCFL extension instruction set
+const (
+	BSSTORE OpCode = 0xdd
+	BAGG    OpCode = 0xde
+	BDL     OpCode = 0xdf
+)
+
 // Since the opcodes aren't all in order we can't use a regular slice.
 var opCodeToString = map[OpCode]string{
 	// 0x0 range - arithmetic ops.
@@ -394,6 +401,11 @@ var opCodeToString = map[OpCode]string{
 	REVERT:       "REVERT",
 	INVALID:      "INVALID",
 	SELFDESTRUCT: "SELFDESTRUCT",
+
+	// BCFL extension instruction set
+	BSSTORE: "BSSTORE",
+	BAGG:    "BAGG",
+	BDL:     "BDL",
 }
 
 func (op OpCode) String() string {
@@ -552,6 +564,9 @@ var stringToOp = map[string]OpCode{
 	"REVERT":         REVERT,
 	"INVALID":        INVALID,
 	"SELFDESTRUCT":   SELFDESTRUCT,
+	"BSSTORE":        BSSTORE,
+	"BAGG":           BAGG,
+	"BDL":            BDL,
 }
 
 // StringToOp finds the opcode whose name is stored in `str`.
