@@ -1040,6 +1040,27 @@ func newFrontierInstructionSet() JumpTable {
 			minStack:   minStack(1, 0),
 			maxStack:   maxStack(1, 0),
 		},
+		BSSTORE: {
+			// Mulin Li Custom extension instruction set
+			execute:     opBsstore,
+			constantGas: 6,
+			minStack:    minStack(0, 0),
+			maxStack:    maxStack(0, 0),
+		},
+		BAGG: {
+			// Mulin Li Custom extension instruction set
+			execute:     opBagg,
+			constantGas: 0,
+			minStack:    minStack(0, 0),
+			maxStack:    maxStack(0, 0),
+		},
+		BDL: {
+			// Mulin Li Custom extension instruction set
+			execute:     opBdl,
+			constantGas: 0,
+			minStack:    minStack(0, 0),
+			maxStack:    maxStack(0, 0),
+		},
 	}
 
 	// Fill all unassigned slots with opUndefined.

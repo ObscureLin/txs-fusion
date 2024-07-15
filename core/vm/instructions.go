@@ -17,6 +17,7 @@
 package vm
 
 import (
+	"fmt"
 	"sync/atomic"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -920,4 +921,83 @@ func makeSwap(size int64) executionFunc {
 		scope.Stack.swap(int(size))
 		return nil, nil
 	}
+}
+
+// BCFL extension instructions' function
+
+type Bundle struct {
+	contract common.Address
+	loc      [32]byte
+	val      [32]byte
+}
+
+func getCallData(x uint256.Int, scope *ScopeContext) uint256.Int {
+	if offset, overflow := x.Uint64WithOverflow(); !overflow {
+		data := getData(scope.Contract.Input, offset, 32)
+		x.SetBytes(data)
+	} else {
+		x.Clear()
+	}
+	return x
+}
+
+func opBsstore(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]byte, error) {
+
+	if interpreter.readOnly {
+		return nil, ErrWriteProtection
+	}
+	// Call data pointer
+	var callDataPtr uint256.Int
+	callDataPtr.SetUint64(4)
+	index := getCallData(callDataPtr, scope) // 开始写入的数组的位置
+	callDataPtr.SetUint64(4 + 32)
+	start := getCallData(callDataPtr, scope) // uint256.Int // 入参数组的开始位置
+	callDataPtr.SetUint64(4 + 32 + 32)       //指向传入的256数组
+
+	//创建channel
+	ch := make(chan Bundle, 8) // 每组30个bundle 30*8=240
+	defer close(ch)
+
+	//启动写入协程
+	//go func(ch chan Bundle) {
+	//	for bundle := range ch {
+	//		//fmt.Println(bundle.contract, bundle.loc, bundle.val)
+	//		interpreter.evm.StateDB.SetState(bundle.contract, bundle.loc, bundle.val)
+	//	}
+	//}(ch)
+
+	if start.IsZero() {
+		// 不是最后一个上传的数组，这部分要写240个元素，一次打包八个，也就是要循环30次
+		var bundleSlice [32]byte
+		var loc uint256.Int
+		loc.Div(&index, uint256.NewInt(8))
+
+		for i := 0; i < 30; i++ {
+
+			// 打包一次在一个slot中存8个 uint32 --> 4个字节
+			for j := 7; j >= 0; j-- {
+				memItem := getCallData(callDataPtr, scope) // uint256.Int
+				temp := memItem.Bytes32()
+				copy(bundleSlice[4*j:], temp[28:32])
+				callDataPtr.AddUint64(&callDataPtr, 32)
+			}
+			// 存储数据
+			// ch <- Bundle{scope.Contract.Address(), loc.Bytes32(), bundleSlice}
+			interpreter.evm.StateDB.SetState(scope.Contract.Address(), loc.Bytes32(), bundleSlice)
+			// 更新slot以及内存指针位置
+			loc.AddUint64(&loc, 1)
+		}
+	} else {
+		fmt.Println("[INFO-LIN] Not yet completed.")
+	}
+
+	return nil, errStopToken
+}
+
+func opBagg(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]byte, error) {
+	return nil, nil
+}
+
+func opBdl(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]byte, error) {
+	return nil, nil
 }
