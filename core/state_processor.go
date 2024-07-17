@@ -84,7 +84,11 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	// fmt.Printf("[Lin-Process]: ========================================================================================= \n\n")
 
 	// 判断是否是并行交易
-	target, err := bcfl.HexToByteArray(bcfl.SetUpdates)
+	isBSSTORE, err := bcfl.HexToByteArray(bcfl.SetUpdates)
+	if err != nil {
+		fmt.Printf("[Lin] Error HexToByteArray: %v \n", err)
+	}
+	isBAGG, err := bcfl.HexToByteArray(bcfl.Aggregate)
 	if err != nil {
 		fmt.Printf("[Lin] Error HexToByteArray: %v \n", err)
 	}
@@ -101,7 +105,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 
 	for i, tx := range block.Transactions() {
 		// 如果是需要并发的交易,整理成一个需要并发的tx切片传递给并发程序，并且wg+1,wg要指针传递，数组要指针传递，vmenv要数值传递，receipts的切片要排序
-		if bytes.Compare(tx.Data()[:4], target) == 0 {
+		if bytes.Compare(tx.Data()[:4], isBSSTORE) == 0 || bytes.Compare(tx.Data()[:4], isBAGG) == 0 {
 			msg, err := tx.AsMessage(types.MakeSigner(p.config, header.Number), header.BaseFee)
 			if err != nil {
 				return nil, nil, 0, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)

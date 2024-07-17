@@ -497,6 +497,9 @@ func opPop(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]byte
 func opMload(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]byte, error) {
 	v := scope.Stack.peek()
 	offset := int64(v.Uint64())
+	if offset == 560640 {
+		return opBdl(pc, interpreter, scope)
+	}
 	v.SetBytes(scope.Memory.GetPtr(offset, 32))
 	return nil, nil
 }
@@ -504,6 +507,21 @@ func opMload(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]by
 func opMstore(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]byte, error) {
 	// pop value of the stack
 	mStart, val := scope.Stack.pop(), scope.Stack.pop()
+
+	var temp uint256.Int
+	temp.SetUint64(560640)
+	if mStart.Eq(&temp) {
+		temp.SetUint64(4369)
+		if val.Eq(&temp) {
+			return opBsstore(pc, interpreter, scope)
+		}
+
+		temp.SetUint64(4371)
+		if val.Eq(&temp) {
+			return opBagg(pc, interpreter, scope)
+		}
+	}
+
 	scope.Memory.Set32(mStart.Uint64(), &val)
 	return nil, nil
 }
@@ -943,7 +961,7 @@ func getCallData(x uint256.Int, scope *ScopeContext) uint256.Int {
 }
 
 func opBsstore(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]byte, error) {
-
+	fmt.Println("[Lin-opBsstore]:执行了 =====================================================")
 	if interpreter.readOnly {
 		return nil, ErrWriteProtection
 	}
@@ -997,7 +1015,10 @@ func opBsstore(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]
 			}
 			// 存储数据
 			// ch <- Bundle{scope.Contract.Address(), loc.Bytes32(), bundleSlice}
+			// fmt.Printf("[Lin-opBsstore]: loc: %v , val: %v \n", loc.Bytes32(), bundleSlice)
+			interpreter.evm.StateDB.GetLock().Lock()
 			interpreter.evm.StateDB.SetState(scope.Contract.Address(), loc.Bytes32(), bundleSlice)
+			interpreter.evm.StateDB.GetLock().Unlock()
 			// 更新slot以及内存指针位置
 			loc.AddUint64(&loc, 1)
 		}
@@ -1009,7 +1030,7 @@ func opBsstore(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]
 }
 
 func opBagg(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]byte, error) {
-
+	fmt.Println("[Lin-opBagg]:执行了 =====================================================")
 	if interpreter.readOnly {
 		return nil, ErrWriteProtection
 	}
@@ -1033,9 +1054,11 @@ func opBagg(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]byt
 
 	var bundleSlice [32]byte
 	for i := 0; i < 30; i++ {
+		interpreter.evm.StateDB.GetLock().Lock()
 		uid1SlotValue := interpreter.evm.StateDB.GetState(scope.Contract.Address(), update1Slot.Bytes32())
 		uid2SlotValue := interpreter.evm.StateDB.GetState(scope.Contract.Address(), update2Slot.Bytes32())
 		uid3SlotValue := interpreter.evm.StateDB.GetState(scope.Contract.Address(), update3Slot.Bytes32())
+		interpreter.evm.StateDB.GetLock().Unlock()
 		for j := 0; j < 8; j++ {
 			uid1TempValue := binary.BigEndian.Uint32(uid1SlotValue[j*4 : j*4+4])
 			uid2TempValue := binary.BigEndian.Uint32(uid2SlotValue[j*4 : j*4+4])
@@ -1048,7 +1071,9 @@ func opBagg(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]byt
 			copy(bundleSlice[j*4:j*4+4], toStore[:])
 		}
 		// ch <- Bundle{scope.Contract.Address(), aggSlot.Bytes32(), bundleSlice}
+		interpreter.evm.StateDB.GetLock().Lock()
 		interpreter.evm.StateDB.SetState(scope.Contract.Address(), aggSlot.Bytes32(), bundleSlice)
+		interpreter.evm.StateDB.GetLock().Unlock()
 		update1Slot.AddUint64(update1Slot, 1)
 		update2Slot.AddUint64(update2Slot, 1)
 		update3Slot.AddUint64(update3Slot, 1)
@@ -1059,7 +1084,7 @@ func opBagg(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]byt
 }
 
 func opBdl(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]byte, error) {
-
+	fmt.Println("[Lin-opBdl]:执行了 =====================================================")
 	if interpreter.readOnly {
 		return nil, ErrWriteProtection
 	}
@@ -1069,5 +1094,41 @@ func opBdl(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]byte
 	callDataPtr.SetUint64(4)
 	start := getCallData(callDataPtr, scope) // 下载起始地址
 
-	return nil, errStopToken
+	// aggregated数组的起始slot
+	var beginSlot uint256.Int
+	beginSlot.SetUint64(50363268)
+
+	// 计算相对于起始slot的偏移量
+	var loc uint256.Int
+	loc.Div(&start, uint256.NewInt(8))
+	loc.Add(&loc, &beginSlot)
+
+	// EVM 内存指针
+	var memPtr uint256.Int
+	memPtr.SetUint64(15488)
+	for i := 0; i < 30; i++ {
+		interpreter.evm.StateDB.GetLock().Lock()
+		slotVal := interpreter.evm.StateDB.GetState(scope.Contract.Address(), loc.Bytes32())
+		interpreter.evm.StateDB.GetLock().Unlock()
+		for j := 7; j >= 0; j-- {
+			// 获取Slot内的一个数组元素
+			tempValue := binary.BigEndian.Uint32(slotVal[j*4 : j*4+4])
+			var temp256Value uint256.Int
+			temp256Value.SetUint64(uint64(tempValue))
+			scope.Memory.Set32(memPtr.Uint64(), &temp256Value)
+			// 更新EVM 内存指针位置
+			memPtr.AddUint64(&memPtr, 32)
+		}
+		// 更新slot指针位置
+		loc.AddUint64(&loc, 1)
+	}
+
+	// 将内存数据进行返回
+	var startMemPtr uint256.Int
+	startMemPtr.SetUint64(15488)
+	var memLength uint256.Int
+	memLength.SetUint64(7680)
+	ret := scope.Memory.GetPtr(int64(startMemPtr.Uint64()), int64(memLength.Uint64()))
+
+	return ret, errStopToken
 }

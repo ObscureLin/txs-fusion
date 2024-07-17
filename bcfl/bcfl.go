@@ -3,9 +3,9 @@ package bcfl
 import "encoding/hex"
 
 const (
-	SetUpdates = "19e13d20"
-	// Download=""
-	// Aggregate=""
+	SetUpdates    = "840117d4"
+	Aggregate     = "414fbc59"
+	Download      = "d7e037ac"
 	ParentLinkTag = 1024
 )
 
