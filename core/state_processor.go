@@ -215,7 +215,7 @@ func applyTransaction(msg types.Message, config *params.ChainConfig, gp *GasPool
 
 func concurrentApplyTx(msgs []*types.Message, config *params.ChainConfig, gp *GasPool, statedb *state.StateDB, blockNumber *big.Int, blockHash common.Hash, txs types.Transactions, usedGas *uint64, evm *vm.EVM, wg *sync.WaitGroup, msgToReceipt *sync.Map, cocrIndex *[]int) []error {
 
-	fmt.Printf("[Lin-concurrentApplyTx]: 需要并发的交易: %v \n", msgs)
+	// fmt.Printf("[Lin-concurrentApplyTx]: 需要并发的交易: %v \n", msgs)
 
 	// var initGasPool = new(GasPool).AddGas(uint64(*gp)) // 记录初始gasPool
 	txsIndex := *cocrIndex   // 记录并发交易在区块内部的索引

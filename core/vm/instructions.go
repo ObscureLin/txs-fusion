@@ -961,7 +961,7 @@ func getCallData(x uint256.Int, scope *ScopeContext) uint256.Int {
 }
 
 func opBsstore(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]byte, error) {
-	fmt.Println("[Lin-opBsstore]:执行了 =====================================================")
+	// fmt.Println("[Lin-opBsstore]:执行了 =====================================================")
 	if interpreter.readOnly {
 		return nil, ErrWriteProtection
 	}
@@ -1030,7 +1030,7 @@ func opBsstore(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]
 }
 
 func opBagg(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]byte, error) {
-	fmt.Println("[Lin-opBagg]:执行了 =====================================================")
+	// fmt.Println("[Lin-opBagg]:执行了 =====================================================")
 	if interpreter.readOnly {
 		return nil, ErrWriteProtection
 	}
@@ -1084,7 +1084,7 @@ func opBagg(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]byt
 }
 
 func opBdl(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]byte, error) {
-	fmt.Println("[Lin-opBdl]:执行了 =====================================================")
+	// fmt.Println("[Lin-opBdl]:执行了 =====================================================")
 	if interpreter.readOnly {
 		return nil, ErrWriteProtection
 	}
