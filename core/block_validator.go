@@ -114,7 +114,7 @@ func (v *BlockValidator) ValidateState(block *types.Block, statedb *state.StateD
 	if root := statedb.IntermediateRoot(v.config.IsEIP158(header.Number)); header.Root != root {
 		return fmt.Errorf("invalid merkle root (remote: %x local: %x)", header.Root, root)
 	}
-	fmt.Printf("[Lin-ValidateState]:区块 %v 验证正确 可以接收 \n", block.Number())
+	// fmt.Printf("[Lin-ValidateState]:区块 %v 验证正确 可以接收 \n", block.Number())
 	return nil
 }
 

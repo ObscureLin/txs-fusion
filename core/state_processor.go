@@ -30,7 +30,9 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 	"math/big"
+	"runtime"
 	"sync"
+	"time"
 )
 
 // StateProcessor is a basic Processor, which takes care of transitioning
@@ -60,6 +62,7 @@ func NewStateProcessor(config *params.ChainConfig, bc *BlockChain, engine consen
 // returns the amount of gas that was used in the process. If any of the
 // transactions failed to execute due to insufficient gas it will return an error.
 func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg vm.Config) (types.Receipts, []*types.Log, uint64, error) {
+
 	var (
 		receipts    types.Receipts
 		usedGas     = new(uint64)
@@ -77,11 +80,13 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	vmenv := vm.NewEVM(blockContext, vm.TxContext{}, statedb, p.config, cfg) // *EVM
 
 	// Iterate over and process the individual transactions
-	//fmt.Printf("\n[Lin-Process]: +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++ \n")
-	//for index, v := range block.Transactions() {
-	//	fmt.Printf("当前交易是: %v, Parent: %v, Child: %v \n", index, *(v.Parent()), *(v.Child()))
+	//if block.Transactions().Len() != 0 {
+	//	fmt.Printf("\n[Lin-Process]: --------------------------------------------------------- \n")
+	//	for index, v := range block.Transactions() {
+	//		fmt.Printf("当前交易是: %v, Parent: %v, Child: %v \n", index, *(v.Parent()), *(v.Child()))
+	//	}
+	//	fmt.Printf("[Lin-Process]: --------------------------------------------------------- \n\n")
 	//}
-	// fmt.Printf("[Lin-Process]: ========================================================================================= \n\n")
 
 	// 判断是否是并行交易
 	isBSSTORE, err := bcfl.HexToByteArray(bcfl.SetUpdates)
@@ -103,6 +108,9 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	var msgToReceipt sync.Map                  // *msg -> *receipt 的映射
 	indexToMsg := make(map[int]*types.Message) // index -> *msg 的映射
 
+	var serialTimeOverhead time.Duration
+	serialTxs := 0
+
 	for i, tx := range block.Transactions() {
 		// 如果是需要并发的交易,整理成一个需要并发的tx切片传递给并发程序，并且wg+1,wg要指针传递，数组要指针传递，vmenv要数值传递，receipts的切片要排序
 		if bytes.Compare(tx.Data()[:4], isBSSTORE) == 0 || bytes.Compare(tx.Data()[:4], isBAGG) == 0 {
@@ -114,16 +122,16 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 			cocrMsgs = append(cocrMsgs, &msg)
 			cocrIndex = append(cocrIndex, i)
 			indexToMsg[i] = &msg // 记录当前串行交易的索引
-
-			cocrWaitGroup.Add(1) // 先不执行,wg+1
 		} else {
 			// 正常串行的交易
+			startT := time.Now()
 			msg, err := tx.AsMessage(types.MakeSigner(p.config, header.Number), header.BaseFee)
 			if err != nil {
 				return nil, nil, 0, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
 			}
 			// tx.hash 通过 LOG 指令来创造Event，i（index）用于生成收据
 			statedb.SetTxContext(tx.Hash(), i)
+
 			receipt, err := applyTransaction(msg, p.config, gp, statedb, blockNumber, blockHash, tx, usedGas, vmenv)
 			if err != nil {
 				return nil, nil, 0, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
@@ -134,14 +142,27 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 			// 记录当前串行交易的索引、收据
 			indexToMsg[i] = &msg
 			msgToReceipt.Store(&msg, receipt)
+
+			//计算串行执行耗时
+			endT := time.Now()
+			elapsed := endT.Sub(startT)
+			serialTxs++
+			serialTimeOverhead += elapsed
 		}
 	}
 
+	// 打印串行耗时
+	if serialTxs != 0 {
+		fmt.Printf("\n[Lin-Record 串行]: Block: %v 执行了 %v 笔串行交易,耗时 %v . \n", block.Number(), serialTxs, serialTimeOverhead)
+	}
+
 	// 等待并发结束处理,处理receipts, allLogs, *usedGas, error , usedGas 要累加，receipt 的生成root那部分改掉
-	cocrErrs := concurrentApplyTx(cocrMsgs, p.config, gp, statedb, blockNumber, blockHash, cocrTxs, usedGas, vmenv, &cocrWaitGroup, &msgToReceipt, &cocrIndex)
-	if len(cocrErrs) != 0 {
-		log.Error(fmt.Sprintf("[Lin-Process]并发交易出错: %w", cocrErrs))
-		return nil, nil, 0, fmt.Errorf("[Lin-Process]并发交易出错: %w", cocrErrs)
+	if len(cocrMsgs) != 0 {
+		cocrErrs := concurrentApplyTx(cocrMsgs, p.config, gp, statedb, blockNumber, blockHash, cocrTxs, usedGas, vmenv, &cocrWaitGroup, &msgToReceipt, &cocrIndex)
+		if len(cocrErrs) != 0 {
+			log.Error(fmt.Sprintf("[Lin-Process]并发交易出错: %w", cocrErrs))
+			return nil, nil, 0, fmt.Errorf("[Lin-Process]并发交易出错: %w", cocrErrs)
+		}
 	}
 
 	// 根据tx在区块内的顺序生成收据和日志
@@ -155,6 +176,8 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		receipts = append(receipts, receipt)
 		allLogs = append(allLogs, receipt.Logs...)
 	}
+	//fmt.Printf("[Lin-Process]: Block %v 的 收据为: %v \n", blockNumber, receipts)
+
 	// Fail if Shanghai not enabled and len(withdrawals) is non-zero.
 	withdrawals := block.Withdrawals()
 	if len(withdrawals) > 0 && !p.config.IsShanghai(block.Time()) {
@@ -216,14 +239,20 @@ func applyTransaction(msg types.Message, config *params.ChainConfig, gp *GasPool
 func concurrentApplyTx(msgs []*types.Message, config *params.ChainConfig, gp *GasPool, statedb *state.StateDB, blockNumber *big.Int, blockHash common.Hash, txs types.Transactions, usedGas *uint64, evm *vm.EVM, wg *sync.WaitGroup, msgToReceipt *sync.Map, cocrIndex *[]int) []error {
 
 	// fmt.Printf("[Lin-concurrentApplyTx]: 需要并发的交易: %v \n", msgs)
-
 	// var initGasPool = new(GasPool).AddGas(uint64(*gp)) // 记录初始gasPool
-	txsIndex := *cocrIndex   // 记录并发交易在区块内部的索引
-	var cocrErrs []error     // 记录并发执行交易时候出现的error
-	var ggeLock sync.RWMutex // 用于更新gaspool,gas,err时用的读写锁
+	txsIndex := *cocrIndex              // 记录并发交易在区块内部的索引
+	var cocrErrs []error                // 记录并发执行交易时候出现的error
+	var ggeLock sync.RWMutex            // 用于更新gaspool,gas,err时用的读写锁
+	cocrCount := runtime.NumCPU()       // 最大支持并发
+	c := make(chan struct{}, cocrCount) // 控制任务并发的chan
+	defer close(c)
 
 	// 遍历所有需要并发的交易msgs
+	startT := time.Now()
 	for i, _ := range msgs {
+		wg.Add(1)
+		c <- struct{}{} // 作用类似于waitgroup.Add(1)
+
 		index := i             // 记录当前循环的索引
 		cocrMsg := msgs[index] //获取要执行的msg
 
@@ -287,10 +316,17 @@ func concurrentApplyTx(msgs []*types.Message, config *params.ChainConfig, gp *Ga
 			receipt.TransactionIndex = uint(txsIndex[index])
 			// 记录当前串行交易的收据
 			msgToReceipt.Store(cocrMsg, receipt)
+
+			<-c // 执行完毕，释放资源
 		}()
 	}
 	// 等待所有的并发完成
 	wg.Wait()
+	endT := time.Now()
+	elapsed := endT.Sub(startT)
+	if len(msgs) != 0 {
+		fmt.Printf("\n[Lin-Record 并行]: Block: %v 执行了 %v 笔并行交易,耗时 %v . \n", blockNumber, len(msgs), elapsed)
+	}
 
 	// Update the state with pending changes.
 	statedb.GetLock().Lock()

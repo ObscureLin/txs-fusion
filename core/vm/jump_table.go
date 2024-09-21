@@ -1043,21 +1043,21 @@ func newFrontierInstructionSet() JumpTable {
 		BSSTORE: {
 			// Mulin Li Custom extension instruction set
 			execute:     opBsstore,
-			constantGas: 130,
+			constantGas: 3,
 			minStack:    minStack(3, 0),
 			maxStack:    maxStack(3, 0),
 		},
 		BAGG: {
 			// Mulin Li Custom extension instruction set
 			execute:     opBagg,
-			constantGas: 130,
+			constantGas: 3,
 			minStack:    minStack(1, 0),
 			maxStack:    maxStack(1, 0),
 		},
 		BDL: {
 			// Mulin Li Custom extension instruction set
 			execute:     opBdl,
-			constantGas: 130,
+			constantGas: 3,
 			minStack:    minStack(1, 0),
 			maxStack:    maxStack(1, 0),
 		},

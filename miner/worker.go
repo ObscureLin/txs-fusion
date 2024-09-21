@@ -1094,14 +1094,17 @@ func (w *worker) fillTransactions(interrupt *int32, env *environment) error {
 	// 1. reset previous link
 	txs := env.txs
 	// 计算目标交易函数签名的字节切片
-	target, err := bcfl.HexToByteArray(bcfl.SetUpdates)
+	targetSetUpdates, err := bcfl.HexToByteArray(bcfl.SetUpdates)
+	targetAggregate, err := bcfl.HexToByteArray(bcfl.Aggregate)
+	targetDownload, err := bcfl.HexToByteArray(bcfl.Download)
 	if err != nil {
 		fmt.Printf("[Lin] Error HexToByteArray: %v \n", err)
 	}
+
 	// 开始遍历重置目标交易
 	for i := 0; i < len(txs); i++ {
 		curTx := txs[i]
-		if bytes.Compare(curTx.Data()[:4], target) == 0 {
+		if bytes.Compare(curTx.Data()[:4], targetSetUpdates) == 0 || bytes.Compare(curTx.Data()[:4], targetAggregate) == 0 || bytes.Compare(curTx.Data()[:4], targetDownload) == 0 {
 			*(curTx.Parent()) = bcfl.ParentLinkTag // 初始化一个默认值
 			slice := make([]uint64, 0)
 			*(curTx.Child()) = slice
@@ -1111,21 +1114,24 @@ func (w *worker) fillTransactions(interrupt *int32, env *environment) error {
 	// 2. create new link
 	for i := 0; i < len(txs)-1; i++ {
 		curTx := txs[i]
-		// 该交易是头交易且是目标函数调用
-		if *(curTx.Parent()) == bcfl.ParentLinkTag && bytes.Compare(curTx.Data()[:4], target) == 0 {
-			//从当前交易的后一个交易开始遍历所有，看看是否可以成为儿子
-			for j := i + 1; j < len(txs); j++ {
-				followTx := txs[j]
-				//比较两个交易的函数签名等信息是否相等(可否合并链接)
-				if bytes.Compare(curTx.Data()[:4], followTx.Data()[:4]) == 0 && curTx.From() == followTx.From() {
-					ctxChild := curTx.Child()
-					*ctxChild = append(*ctxChild, uint64(j))
-					*(followTx.Parent()) = uint64(i)
+		// 该交易是头交易
+		if *(curTx.Parent()) == bcfl.ParentLinkTag {
+			// 且是目标函数调用
+			if bytes.Compare(curTx.Data()[:4], targetSetUpdates) == 0 || bytes.Compare(curTx.Data()[:4], targetAggregate) == 0 || bytes.Compare(curTx.Data()[:4], targetDownload) == 0 {
+				//从当前交易的后一个交易开始遍历所有，看看是否可以成为儿子
+				for j := i + 1; j < len(txs); j++ {
+					followTx := txs[j]
+					//比较两个交易的函数签名等信息是否相等(可否合并链接)
+					if bytes.Compare(curTx.Data()[:4], followTx.Data()[:4]) == 0 && curTx.From() == followTx.From() {
+						ctxChild := curTx.Child()
+						*ctxChild = append(*ctxChild, uint64(j))
+						*(followTx.Parent()) = uint64(i)
+					}
 				}
 			}
 		}
-	}
-	// Finish txs link
+
+	} // Finish txs link
 
 	return nil
 }
